@@ -1,0 +1,13 @@
+*{box-sizing:border-box}body{margin:0;background:#f3f5f4;color:#19352e;font:16px/1.6 Inter,"Yu Gothic UI",sans-serif}header{background:#143c34;color:white;padding:16px 5vw;display:flex;align-items:center;gap:20px}header strong{font-size:22px}header span,label{font-size:14px}main{max-width:1500px;margin:auto;padding:30px 5vw}.bar,.layout{display:flex;gap:20px}.bar{align-items:end;justify-content:space-between;margin-bottom:22px}.bar div{min-width:0}.layout{align-items:start}.viewer,aside{background:white;border:1px solid #ccd7d1;border-radius:12px;overflow:hidden}.viewer{flex:2.5;min-width:0}aside{flex:1;padding:22px}h1{font-size:20px;margin:0 0 18px}.sheet{background:#e2e9e6;min-height:320px;padding:16px;display:grid;place-items:center}canvas{max-width:100%;height:auto;box-shadow:0 1px 8px #18352826}nav{display:flex;justify-content:center;align-items:center;gap:24px;padding:12px}button,select,textarea{font:inherit;border-radius:6px;padding:8px 12px;border:1px solid #9fb0a8;background:white;color:inherit}button{cursor:pointer}button:disabled{opacity:.45;cursor:default}#open,#save{background:#216348;color:white;border-color:#216348}label{display:block;font-weight:600;margin-bottom:4px}select{max-width:100%}form{display:grid;gap:6px}textarea{resize:vertical;width:100%}ul{padding:0;list-style:none}li{background:#fff3ce;border-left:3px solid #d4ae53;padding:10px 14px;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}li strong{display:block;font-size:13px}[hidden]{display:none}@media(max-width:760px){.layout{display:grid}.sheet{min-height:200px}main{padding:18px}.bar{gap:8px}#open{white-space:nowrap}}
+.actions,.room-heading,.share-row{display:flex;align-items:center;gap:10px}
+.actions,.room-heading{flex-wrap:wrap}
+#create-room{border-color:#216348;color:#216348}
+.room-tools{background:white;border:1px solid #ccd7d1;border-radius:12px;padding:12px 16px;margin-bottom:22px}
+.room-heading{column-gap:16px}
+.room-heading p,.room-heading time,#lan-hint{margin:0;font-size:14px}
+.room-heading a{margin-left:auto;color:#216348;font-size:14px}
+#share-tools{margin-top:10px}
+#join-url{flex:1;min-width:0;font:inherit;padding:8px 12px;border:1px solid #9fb0a8;border-radius:6px;color:inherit;background:#f3f5f4}
+#copy-url{flex:none}
+#lan-hint{margin-top:6px}
+@media(max-width:480px){.bar{flex-wrap:wrap}.room-heading a{margin-left:0}}
