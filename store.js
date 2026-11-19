@@ -1,12 +1,19 @@
 const ready = new Promise((resolve, reject) => {
-  const request = indexedDB.open('lt-study-notes', 1);
-  request.onupgradeneeded = () => {
+  const request = indexedDB.open('lt-study-notes', 2);
+  request.onupgradeneeded = event => {
     const db = request.result;
-    db.createObjectStore('decks', { keyPath: 'id' });
-    db.createObjectStore('notes', { keyPath: 'id' }).createIndex('location', ['deck', 'page']);
-    db.createObjectStore('settings');
+    if (event.oldVersion < 1) {
+      db.createObjectStore('decks', { keyPath: 'id' });
+      db.createObjectStore('notes', { keyPath: 'id' }).createIndex('location', ['deck', 'page']);
+      db.createObjectStore('settings');
+    }
+    db.createObjectStore('roomNoteQueue', { keyPath: ['room', 'id'] }).createIndex('room', 'room');
   };
-  request.onsuccess = () => resolve(request.result);
+  request.onsuccess = () => {
+    const db = request.result;
+    db.onversionchange = () => db.close();
+    resolve(db);
+  };
   request.onerror = () => reject(request.error);
 });
 

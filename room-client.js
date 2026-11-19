@@ -45,3 +45,11 @@ export async function changeRoomPage(id, presenterToken, page) {
   });
   return response.json();
 }
+
+export async function sendRoomNote({ room, id, page, kind, text }) {
+  await request('/' + room + '/notes/' + id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ page, kind, text }),
+  });
+}
