@@ -2,8 +2,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { maxRoomNoteLength, validRoomNoteText } from './room-note.js';
 
 const maxPdfBytes = 64 * 1024 * 1024;
+const maxNoteBytes = 6 * maxRoomNoteLength + 1024; // JSON can escape each code unit as six bytes.
+const noteKinds = ['補足', '質問', '別の見方'];
 const token = () => randomBytes(16).toString('hex');
 
 class RoomError extends Error {
@@ -13,18 +16,22 @@ class RoomError extends Error {
   }
 }
 
-async function readPdf(request) {
-  if (Number(request.headers['content-length']) > maxPdfBytes) {
+async function readBody(request, maxBytes) {
+  if (Number(request.headers['content-length']) > maxBytes) {
     throw new RoomError(413);
   }
   const chunks = [];
   let size = 0;
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     size += chunk.length;
-    if (size > maxPdfBytes) throw new RoomError(413);
+    if (size > maxBytes) throw new RoomError(413);
     chunks.push(chunk);
   }
-  const pdf = Buffer.concat(chunks, size);
+  return Buffer.concat(chunks, size);
+}
+
+async function readPdf(request) {
+  const pdf = await readBody(request, maxPdfBytes);
   if (!pdf.subarray(0, 1024).includes('%PDF-')) throw new RoomError(400);
   return pdf;
 }
@@ -36,6 +43,38 @@ function pageNumber(header) {
 function json(response, status, data) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(data));
+}
+
+function roomState(rooms, id) {
+  const state = rooms.state.get(id);
+  if (!state) throw new RoomError(404);
+  return { ...state, notes: rooms.notes.all(id, state.page) };
+}
+
+async function saveNote(rooms, request, roomId, noteId) {
+  const room = rooms.presenter.get(roomId);
+  if (!room) throw new RoomError(404);
+  if (request.headers['content-type']?.split(';', 1)[0].trim() !== 'application/json') {
+    throw new RoomError(415);
+  }
+  const body = await readBody(request, maxNoteBytes);
+  let note;
+  try {
+    note = JSON.parse(body.toString('utf8'));
+  } catch {
+    throw new RoomError(400);
+  }
+  if (!Number.isInteger(note?.page) || note.page < 1 || note.page > room.pageCount ||
+      !noteKinds.includes(note.kind) || !validRoomNoteText(note.text)) {
+    throw new RoomError(400);
+  }
+  const { changes } = rooms.addNote.run(roomId, noteId, note.page, note.kind, note.text);
+  if (!changes) {
+    const saved = rooms.note.get(roomId, noteId);
+    if (saved.page !== note.page || saved.kind !== note.kind || saved.text !== note.text) {
+      throw new RoomError(409);
+    }
+  }
 }
 
 function openRooms(root) {
@@ -59,6 +98,15 @@ function openRooms(root) {
       changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
     CREATE INDEX IF NOT EXISTS page_changes_room ON page_changes(room_id, version);
+    CREATE TABLE IF NOT EXISTS notes (
+      room_id TEXT NOT NULL REFERENCES rooms(id),
+      id TEXT NOT NULL,
+      page INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      text TEXT NOT NULL,
+      PRIMARY KEY (room_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS notes_location ON notes(room_id, page);
   `);
   return {
     db,
@@ -77,6 +125,12 @@ function openRooms(root) {
       SELECT ?, ? WHERE ? <> (
         SELECT page FROM page_changes WHERE room_id = ? ORDER BY version DESC LIMIT 1
       )
+    `),
+    notes: db.prepare('SELECT id, kind, text FROM notes WHERE room_id = ? AND page = ? ORDER BY rowid'),
+    note: db.prepare('SELECT page, kind, text FROM notes WHERE room_id = ? AND id = ?'),
+    addNote: db.prepare(`
+      INSERT INTO notes (room_id, id, page, kind, text) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (room_id, id) DO NOTHING
     `),
   };
 }
@@ -115,12 +169,18 @@ export function roomApi(root) {
           rooms.db.exec('ROLLBACK');
           throw error;
         }
-        return json(response, 201, { ...rooms.state.get(id), presenterToken });
+        return json(response, 201, { ...roomState(rooms, id), presenterToken });
       }
 
-      const match = /^\/api\/rooms\/([a-f0-9]{32})(?:\/(pdf|page))?$/.exec(path);
+      const match = /^\/api\/rooms\/([a-f0-9]{32})(?:\/(pdf|page)|\/notes\/([a-f0-9]{32}))?$/.exec(path);
       if (!match) throw new RoomError(404);
-      const [, id, resource] = match;
+      const [, id, resource, noteId] = match;
+      if (noteId) {
+        if (request.method !== 'PUT') throw new RoomError(405);
+        await saveNote(rooms, request, id, noteId);
+        response.writeHead(204);
+        return response.end();
+      }
       if (request.method === 'GET' && resource === 'pdf') {
         const document = rooms.pdf.get(id);
         if (!document) throw new RoomError(404);
@@ -141,9 +201,7 @@ export function roomApi(root) {
       } else if (request.method !== 'GET' || resource) {
         throw new RoomError(405);
       }
-      const state = rooms.state.get(id);
-      if (!state) throw new RoomError(404);
-      json(response, 200, state);
+      json(response, 200, roomState(rooms, id));
     } catch (error) {
       request.resume();
       if (!(error instanceof RoomError)) console.error(error);

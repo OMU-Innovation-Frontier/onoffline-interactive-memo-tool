@@ -3,7 +3,8 @@ import worker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { access } from './store.js';
-import { createRoom, getRoom, getRoomPdf, changeRoomPage } from './room-client.js';
+import { createRoom, getRoom, getRoomPdf, changeRoomPage, sendRoomNote } from './room-client.js';
+import { maxRoomNoteLength, validRoomNoteText } from './room-note.js';
 
 GlobalWorkerOptions.workerSrc = worker;
 const el = id => document.getElementById(id);
@@ -12,6 +13,9 @@ const clock = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-dig
 let roomId = new URLSearchParams(location.search).get('room');
 let presenterToken = roomId && sessionStorage.getItem(presenterKey(roomId));
 let roomVersion = 0;
+let roomNoteCount = 0;
+let lastQueuedNote;
+const queuedNoteStatus = '付箋を送信待ちに追加しました。';
 const drafts = new Map();
 let current;
 let page = 0;
@@ -49,16 +53,16 @@ async function render(deck, number) {
   canvas.height = Math.ceil(scaled.height);
   canvas.setAttribute('aria-label', deck.name + ' ' + number + 'ページ');
   await slide.render({canvasContext: canvas.getContext('2d'), viewport: scaled}).promise;
-  const notes = await read('notes', s => s.index('location').getAll([deck.id, number]));
   if (roomId) {
     if (page) drafts.set(page, { text: el('body').value, kind: el('kind').value });
   } else {
+    const notes = await read('notes', s => s.index('location').getAll([deck.id, number]));
     await write('settings', s => s.put({id: deck.id, page: number}, 'last'));
+    showNotes(notes.sort((a,b) => a.time-b.time));
   }
   document.querySelector('canvas').replaceWith(canvas);
   el('empty').hidden = true;
   el('page').value = number + ' / ' + deck.pdf.numPages;
-  el('notes').replaceChildren(...notes.sort((a,b) => a.time-b.time).map(noteElement));
   const draft = drafts.get(number);
   el('body').value = draft?.text ?? '';
   if (draft) el('kind').value = draft.kind;
@@ -72,6 +76,12 @@ function noteElement(note) {
   kind.textContent = note.kind;
   item.append(kind, note.text);
   return item;
+}
+
+function showNotes(notes) {
+  const items = document.createDocumentFragment();
+  for (const note of notes) items.append(noteElement(note));
+  el('notes').replaceChildren(items);
 }
 
 async function openDeck(record, number = 1, isNew = false, name = record.file.name) {
@@ -99,6 +109,7 @@ function showRoom() {
   el('room-role').textContent = presenterToken ? '発表者' : '参加者';
   el('share-tools').hidden = !presenterToken;
   el('empty').textContent = '共有資料を読み込んでいます…';
+  el('body').maxLength = maxRoomNoteLength;
   roomStatus('接続中…');
   if (presenterToken) {
     const url = new URL('/', location.origin);
@@ -109,20 +120,25 @@ function showRoom() {
 }
 
 async function applyRoom(state) {
-  if (state.version <= roomVersion) return;
-  if (!current) {
-    const record = await read('decks', s => s.get(state.deckId))
-      ?? { id: state.deckId, file: await getRoomPdf(state) };
-    await openDeck(record, state.page, false, state.name);
-  } else if (page !== state.page) {
-    await render(current, state.page);
+  const newerPage = state.version > roomVersion;
+  // A late poll can arrive after a page change. Notes only grow within a page version.
+  if (state.version < roomVersion || (!newerPage && state.notes.length <= roomNoteCount)) return;
+  if (newerPage) {
+    if (!current) {
+      const record = await read('decks', s => s.get(state.deckId))
+        ?? { id: state.deckId, file: await getRoomPdf(state) };
+      await openDeck(record, state.page, false, state.name);
+    } else if (page !== state.page) {
+      await render(current, state.page);
+    }
+    roomVersion = state.version;
+    const time = el('page-changed');
+    time.dateTime = state.changedAt;
+    time.textContent = '切替 ' + clock.format(new Date(state.changedAt));
+    time.hidden = false;
   }
-  roomVersion = state.version;
-  const time = el('page-changed');
-  time.dateTime = state.changedAt;
-  time.textContent = '切替 ' + clock.format(new Date(state.changedAt));
-  time.hidden = false;
-  roomStatus('同期中');
+  showNotes(state.notes);
+  roomNoteCount = state.notes.length;
 }
 
 function roomConnectionError(error) {
@@ -134,18 +150,40 @@ function roomConnectionError(error) {
   }
 }
 
+async function sendQueuedNotes() {
+  const notes = await read('roomNoteQueue', s => s.index('room').getAll(roomId));
+  for (const note of notes.sort((a,b) => a.time-b.time)) {
+    await sendRoomNote(note);
+    await write('roomNoteQueue', s => s.delete([note.room, note.id]));
+    if (note.id === lastQueuedNote && el('status').textContent === queuedNoteStatus) {
+      el('status').textContent = '会に付箋を保存しました。';
+    }
+  }
+}
+
 async function pollRoom() {
   let delay = 1000;
+  let status = '同期中';
+  try {
+    await sendQueuedNotes();
+  } catch {
+    delay = 3000;
+    status = '未送信の付箋があります。再送しています…';
+  }
   try {
     const state = await getRoom(roomId);
     if (!busy) {
       if (state.version > roomVersion) {
-        await run(() => applyRoom(state), error => {
+        await run(async () => {
+          await applyRoom(state);
+          roomStatus(status);
+        }, error => {
           delay = 3000;
           roomConnectionError(error);
         });
       } else {
-        roomStatus('同期中');
+        await applyRoom(state);
+        roomStatus(status);
       }
     }
   } catch (error) {
@@ -189,6 +227,7 @@ el('create-room').onclick = () => run(async () => {
   history.replaceState(null, '', '?room=' + roomId);
   showRoom();
   await applyRoom(state);
+  roomStatus('同期中');
   setTimeout(pollRoom, 1000);
 }, error => {
   el('status').textContent = error.status === 413
@@ -211,12 +250,24 @@ document.querySelector('form').onsubmit = event => {
   run(async () => {
     const text = el('body').value.trim();
     if (!current || !text) { el('status').textContent = '付箋の内容を入力してください。'; return; }
-    const id = crypto.randomUUID?.() ?? bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-    const note = { id, deck:current.id, page, kind:el('kind').value, text, time:Date.now() };
-    await write('notes', s => s.add(note));
-    el('notes').append(noteElement(note));
+    const id = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+    const note = { id, page, kind: el('kind').value, text, time: Date.now() };
+    if (roomId) {
+      if (!validRoomNoteText(text)) {
+        el('status').textContent = `会の付箋は有効な文字で${maxRoomNoteLength}文字以内で入力してください。`;
+        return;
+      }
+      await write('roomNoteQueue', s => s.add({ ...note, room: roomId }));
+      lastQueuedNote = id;
+      el('status').textContent = queuedNoteStatus;
+    } else {
+      await write('notes', s => s.add({ ...note, deck: current.id }));
+      el('notes').append(noteElement(note));
+      el('status').textContent = 'この端末に保存しました。';
+    }
     el('body').value = '';
-    el('status').textContent = 'この端末に保存しました。';
+  }, () => {
+    el('status').textContent = '付箋を保存できませんでした。ブラウザーの保存容量をご確認ください。';
   });
 };
 
