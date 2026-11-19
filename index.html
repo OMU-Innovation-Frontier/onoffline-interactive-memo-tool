@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>輪講ノート</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><strong>輪講ノート</strong><span>LT会・輪講の記録</span></header>
+  <main>
+    <section id="local-tools" class="bar">
+      <div><label for="decks">スライド資料</label><select id="decks"><option value="">資料を選択</option></select></div>
+      <div class="actions">
+        <button id="open">PDFを開く</button>
+        <button id="create-room" disabled>会を作成</button>
+      </div>
+      <input id="file" type="file" accept="application/pdf,.pdf" hidden>
+    </section>
+    <section id="room-tools" class="room-tools" aria-label="ページ共有" hidden>
+      <div class="room-heading">
+        <strong id="room-role"></strong>
+        <p id="room-status" role="status"></p>
+        <time id="page-changed" hidden></time>
+        <a href="/" id="leave-room">資料一覧に戻る</a>
+      </div>
+      <div id="share-tools" hidden>
+        <label for="join-url">参加URL</label>
+        <div class="share-row">
+          <input id="join-url" type="text" readonly>
+          <button id="copy-url">コピー</button>
+        </div>
+        <p id="lan-hint" hidden>別端末に共有する場合は、LANアドレスでアプリを開いて会を作成してください。</p>
+      </div>
+    </section>
+    <div class="layout">
+      <section class="viewer">
+        <div class="sheet">
+          <p id="empty">PDFを開いて記録を始めましょう</p>
+          <canvas hidden aria-label="スライドのページ画像"></canvas>
+        </div>
+        <nav aria-label="ページ操作">
+          <button id="prev" disabled>前へ</button>
+          <output id="page">― / ―</output>
+          <button id="next" disabled>次へ</button>
+        </nav>
+      </section>
+      <aside>
+        <h1>このページの付箋</h1>
+        <ul id="notes"></ul>
+        <form>
+          <label for="kind">種類</label>
+          <select id="kind"><option>補足</option><option>質問</option><option>別の見方</option></select>
+          <label for="body">付箋の内容</label>
+          <textarea id="body" rows="4" required placeholder="気づきや質問を記録"></textarea>
+          <button id="save" disabled>付箋を保存</button>
+        </form>
+      </aside>
+    </div>
+    <p id="status" role="status"></p>
+  </main>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
