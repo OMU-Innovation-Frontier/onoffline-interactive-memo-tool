@@ -20,4 +20,4 @@ Node.js 24 で `npm ci`、`npm run dev` を実行し、表示された localhost
 
 Node.js 24 で `npm ci` を実行します。APIテストは `npm test` で実行できます。
 
-ブラウザーE2Eテストは、初回に `npx playwright install chromium` で Chromium をインストールしてから `npm run test:e2e` で実行します。共有APIの遮断中に保存した付箋が再読み込み後も IndexedDB に残り、通信が戻ると同じIDで自動再送されて画面に1件だけ表示されることを確認します。
+ブラウザーE2Eテストは、初回に `npx playwright install chromium` で Chromium をインストールしてから `npm run test:e2e` で実行します。共有APIの遮断中に保存した付箋が再読み込み後も IndexedDB に残り、通信が戻ると同じIDで自動再送されて画面に1件だけ表示されることを確認します。サーバーが保存した直後に成功応答が失われた場合も、同じIDで再送され、画面と共有APIに付箋が1件だけ残ることを検証します。
