@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { expect, test as base } from '@playwright/test';
+import { chromium, expect, test as base } from '@playwright/test';
 
 const test = base.extend({
   appUrl: async ({}, use) => {
@@ -33,12 +33,24 @@ const test = base.extend({
     const { id } = await response.json();
     await use({ id, url: `${roomsUrl}/${id}` });
   },
+  participantPage: async ({ appUrl, room }, use) => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${appUrl}/?room=${room.id}`);
+      await expect(page.locator('#room-status')).toHaveText('同期中');
+      await use(page);
+    } finally {
+      await browser.close();
+    }
+  },
 });
 
-test('a queued room note keeps its ID across reload and appears once after reconnecting', async ({ appUrl, room, context, page, request }) => {
+test('a queued room note keeps its ID across reload and syncs once to both browsers after reconnecting', async ({ appUrl, room, context, page, participantPage, request }) => {
   const { id: roomId, url: roomUrl } = room;
   const note = { page: 1, kind: '質問', text: '再読み込み後に再送する付箋' };
   const notes = page.locator('#notes').getByRole('listitem');
+  const participantNotes = participantPage.locator('#notes').getByRole('listitem');
   const isRoomApi = ({ pathname }) => pathname === '/api/rooms' || pathname.startsWith('/api/rooms/');
   const isNotePut = req => req.method() === 'PUT' && req.url().startsWith(`${roomUrl}/notes/`);
   const readQueue = async () => {
@@ -77,6 +89,7 @@ test('a queued room note keeps its ID across reload and appears once after recon
   await expect(page.locator('#room-status')).toHaveText('同期できません。再接続しています…');
   expect(await readQueue()).toEqual(queued);
   await expect(notes).toHaveCount(0);
+  await expect(participantNotes).toHaveCount(0);
   const offlineState = await request.get(roomUrl);
   await expect(offlineState).toBeOK();
   expect((await offlineState.json()).notes).toEqual([]);
@@ -90,6 +103,8 @@ test('a queued room note keeps its ID across reload and appears once after recon
   expect(retry.status()).toBe(204);
   await expect(notes).toHaveText([note.kind + note.text]);
   await expect(notes.first()).toBeVisible();
+  await expect(participantNotes).toHaveText([note.kind + note.text]);
+  await expect(participantNotes.first()).toBeVisible();
   await expect.poll(readQueue).toEqual([]);
 
   const recoveredState = await request.get(roomUrl);
@@ -97,14 +112,16 @@ test('a queued room note keeps its ID across reload and appears once after recon
   expect((await recoveredState.json()).notes).toEqual([{ id, kind: note.kind, text: note.text }]);
 });
 
-test('a saved room note is retried with the same ID and appears once after its response is lost', async ({ appUrl, room, page, request }) => {
+test('a saved room note is retried with the same ID and syncs once to both browsers after its response is lost', async ({ appUrl, room, page, participantPage, request }) => {
   const notesUrl = `${room.url}/notes/`;
   const note = { page: 1, kind: '質問', text: '保存の成功応答が失われた付箋' };
   const isNotePut = req => req.method() === 'PUT' && req.url().startsWith(notesUrl);
+  const participantNotes = participantPage.locator('#notes').getByRole('listitem');
 
   await page.goto(`${appUrl}/?room=${room.id}`);
   const save = page.getByRole('button', { name: '付箋を保存' });
   await expect(save).toBeEnabled();
+  await expect(participantNotes).toHaveCount(0);
   await page.route(`${notesUrl}*`, async route => {
     try {
       // Complete the real save before simulating the loss of its response in Chromium.
@@ -141,4 +158,13 @@ test('a saved room note is retried with the same ID and appears once after its r
   const recoveredState = await request.get(room.url);
   await expect(recoveredState).toBeOK();
   expect((await recoveredState.json()).notes).toEqual([{ id, kind: note.kind, text: note.text }]);
+
+  // The participant can see the first save before the retry, so check its next room poll too.
+  const participantPoll = await participantPage.waitForRequest(req =>
+    req.method() === 'GET' && req.url() === room.url);
+  const participantState = await participantPoll.response();
+  expect(participantState?.status()).toBe(200);
+  expect((await participantState.json()).notes).toEqual([{ id, kind: note.kind, text: note.text }]);
+  await expect(participantNotes).toHaveText([note.kind + note.text]);
+  await expect(participantNotes.first()).toBeVisible();
 });
